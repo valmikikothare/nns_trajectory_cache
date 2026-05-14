@@ -1,0 +1,31 @@
+tasks:
+  - class: CacheBenchmarkTask
+    kwargs:
+      robot_name: left_manipulator
+      backends:
+        - lmdb
+        - dict
+        - linear
+        - kdtree
+      # Larger run for statistical power (~25 unique goals, 5 replay
+      # cycles = ~30 legs/goal/backend, ~600 rows/backend).
+      n_unique_goals: 300
+      n_cycles: 5
+      max_failed_goals: 200
+      seed: 42
+      # Each joint sampled uniformly from `idle ± this` (radians).
+      # 0.3 rad ≈ 17° per joint — small enough to stay clear of the
+      # rig's collision objects (tables, drawers, walls) for most
+      # samples while still producing diverse goals.
+      joint_offset_range_radians: 0.3
+      output_csv: $TABLETOP_CACHE_DIR/cache_benchmark.csv
+      cache_path_template: $TABLETOP_CACHE_DIR/trajectory_cache/benchmark_{robot}_{backend}
+      wipe_cache_before_run: true
+      # Pin to the rrt_star pipeline (the `fallback_pipeline` in
+      # commander.yaml) so every plan goes through the same OMPL
+      # algorithm — apples-to-apples timing across runs.
+      planning_pipeline: ptp
+      planning_time: 0.05
+      max_attempts: 2
+      cache_kwargs_overrides:
+        max_trajectories: 1

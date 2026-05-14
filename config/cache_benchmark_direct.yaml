@@ -1,0 +1,24 @@
+tasks:
+  - class: CacheBenchmarkDirectTask
+    kwargs:
+      robot_name: left_manipulator
+      backends:
+        # - lmdb
+        # - dict
+        # - linear
+        - kdtree
+      # Cache-only benchmark: every "miss" is satisfied by a synthetic
+      # 2-waypoint dummy trajectory, so saturation is bound only by
+      # the cache backends themselves. With `_reverse=True` and a
+      # non-null `pose_link`, each insert writes up to 4 fuzzy bins,
+      # so 10k goals ≈ 40k entries at steady state — plenty of
+      # dynamic range for the time-vs-size plots.
+      n_unique_goals: 10000
+      n_cycles: 1
+      seed: 42
+      joint_offset_range_radians: 0.3
+      output_csv: $TABLETOP_CACHE_DIR/cache_benchmark_direct.csv
+      cache_path_template: $TABLETOP_CACHE_DIR/trajectory_cache/benchmark_direct_{robot}_{backend}
+      wipe_cache_before_run: true
+      cache_kwargs_overrides:
+        max_trajectories: 1
