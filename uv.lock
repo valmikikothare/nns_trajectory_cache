@@ -1,0 +1,40 @@
+version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[[package]]
+name = "lmdb"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/21/44/d94934efaf8f887b6959f131fde740fcaa831edfd13eb5425574637cddd5/lmdb-2.2.0.tar.gz", hash = "sha256:53020e20305c043ea6e68089bc242d744fba6073cdb268332299ba6dda2886d4", size = 933189, upload-time = "2026-03-30T01:26:19.049Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/a7/9604e594725e2d2d0482669cfd9cba23cc47bd288f076c7e93985e5c046c/lmdb-2.2.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:8cc73de748070321986a3a26f51f3693bdd196c20e797d8d2ad0e860b5d2e26c", size = 113096, upload-time = "2026-03-30T01:25:48.293Z" },
+    { url = "https://files.pythonhosted.org/packages/05/cf/7b8e13c1253c77a2c41b7786659d64e97f758a13f1fafdb815cf76630eba/lmdb-2.2.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:9b6fecb1e32c55f0a1f3585d637f221e20146bb3ea9997c50fdfa3a58c0c2e41", size = 111656, upload-time = "2026-03-30T01:25:49.36Z" },
+    { url = "https://files.pythonhosted.org/packages/94/6a/f059c48e4f3321710825fdb1cdee50d32eea90e0c097441beec1b155788f/lmdb-2.2.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:547e083457b6a0936fe73821f35c019be817877f9a85488be818ec8383ef47a6", size = 329003, upload-time = "2026-03-30T01:25:50.47Z" },
+    { url = "https://files.pythonhosted.org/packages/38/22/513c885f284eccd49fc8d1c0a9a9d5da6badd9efc600d482424118df2a67/lmdb-2.2.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:dd505c995a595403f69367cbf16bcd5c88cdd208c706d709ba9b1bc2f9a16f69", size = 333140, upload-time = "2026-03-30T01:25:51.68Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/9b/8b3c81009230ebbe340e59cf2996626800f291e034ed76535d754b2cf98c/lmdb-2.2.0-cp312-cp312-win_amd64.whl", hash = "sha256:dacf737ad869c6e48e1471dfa4d3e7c6ce2d082a218c069e20c4a138804e5fd2", size = 109668, upload-time = "2026-03-30T01:25:53.091Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/68/368099745c1d82d079c490c62cdef5e99bc9a3e9132991e3b82967363d55/lmdb-2.2.0-cp312-cp312-win_arm64.whl", hash = "sha256:653f5e183b04b9124c505c519a3ff691038b4fb459c3211b1323c67bfba53f37", size = 103760, upload-time = "2026-03-30T01:25:54.374Z" },
+    { url = "https://files.pythonhosted.org/packages/64/43/543af71e8fa4c56623bb89c358121ab806426f26685f11539fe5452deffa/lmdb-2.2.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:36e0cbe6b7d59f6e19b448942c5f9e91674f596a802743258f82e926a9a09632", size = 113550, upload-time = "2026-03-30T01:25:55.727Z" },
+    { url = "https://files.pythonhosted.org/packages/22/2c/4702d36c0073737554b20d1d62e879a066df963482f8e514866588ddd82d/lmdb-2.2.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:e5d7a9dfd279a5884806fd478244961e4483cc6d7eb769caed1d7019a8608c20", size = 112135, upload-time = "2026-03-30T01:25:56.809Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/43/d015fea326ed0a634107f29740b002170a462b6d2481e509105c685520f5/lmdb-2.2.0-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d0dbe7902b2cdb60bf6c893f307ef2b2a5039afd22f029515b86183f05ab1353", size = 332108, upload-time = "2026-03-30T01:25:57.907Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/c9/503e7f173994b514936badcbcb7fa9f89a07a3cfe596c6fb95b1b91b8d70/lmdb-2.2.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9c576cdb163ae61a7ef6eecbc20a6025a4abe085491c1dc0c667d726f4926b53", size = 336017, upload-time = "2026-03-30T01:25:59.234Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/94/b3b064acfd2f8acf5aaa53fff2c43963dbc1932ba8b8df4e27d75bf6a34a/lmdb-2.2.0-cp313-cp313-win_amd64.whl", hash = "sha256:746eebcd4c0aeaf0eb2f897028929d270c5bc80ef4918500eec16db6f26f3fcc", size = 109574, upload-time = "2026-03-30T01:26:00.324Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/10/dc7488d1effc339cd9470f9d22ec0fd7052a3d4fdfae87765ecd41cb2e59/lmdb-2.2.0-cp313-cp313-win_arm64.whl", hash = "sha256:006153aac9fb0415a5f3e8ac88789e5730dba3dd0743cd84c95e3951ff68bc3a", size = 103810, upload-time = "2026-03-30T01:26:01.559Z" },
+    { url = "https://files.pythonhosted.org/packages/36/3f/452a81add862d99722e18c92b2a0202d9bb316fb19422150b4424ec7a983/lmdb-2.2.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:0398fef4ab54d66f531257e7a68c03314a267da5d2fd76d75481f62a237ec28b", size = 113740, upload-time = "2026-03-30T01:26:02.632Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/73/62edf6b273d4118c0ed4b5afc5797ca68091e360daa91ef77ae8337084db/lmdb-2.2.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:1610c601f397b0b523310b2393fd430f5973bfdb5dbec9cdc5f89510c5e887ca", size = 112192, upload-time = "2026-03-30T01:26:04.007Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/60/19c59e022e84dad27932b7af58319dd20afdb7de4f48698cac408f6066ab/lmdb-2.2.0-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:dc1d32c08afdbc7db1315d199c827e14c6ad8cdfc7d70872ff983f68079a5edb", size = 331709, upload-time = "2026-03-30T01:26:05.116Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/51/28a24bd3d131ecc7b74c1dac06eea9194e05efe2af5032dece703d397a67/lmdb-2.2.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:bdba273466d099f3ff3a10a26dc1d45101ac519bf67ae23b402a2f3191965e13", size = 334891, upload-time = "2026-03-30T01:26:06.328Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/e6/3071576af6c318f76f36ac3b52f2f809b861d13193c6bbc004bdabd451de/lmdb-2.2.0-cp314-cp314-win_amd64.whl", hash = "sha256:00a051a0d29e0d88e84035884e91a57e2e850355c7e1a3ea05c34753a56d3e12", size = 111309, upload-time = "2026-03-30T01:26:07.792Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/5d/723eabbfe716013db0d13c2015784249e91c87524cde1539c6b99daac68e/lmdb-2.2.0-cp314-cp314-win_arm64.whl", hash = "sha256:2d2968d2a3ff6e69596d9604d2029d2d1265079aa2864eb721c27e076a1fd792", size = 106210, upload-time = "2026-03-30T01:26:09.231Z" },
+]
+
+[[package]]
+name = "nns-trajectory-cache"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "lmdb" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "lmdb", specifier = ">=2.2.0" }]
