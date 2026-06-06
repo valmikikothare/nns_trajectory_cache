@@ -1,11 +1,11 @@
 """Fuzzy-binning trajectory cache (abstract intermediate class).
 
-A `FuzzyTrajectoryCache` indexes `PlanRequest`s by quantizing every
-float (joint angles, goal position, goal orientation) into an integer
-bin via `int(value // tolerance)`, then serializing the resulting dict
-to JSON bytes. Two requests with the same bin assignments collide on
-the same bytes-key — the "fuzzy match" — and share a sorted list of
-candidate trajectories.
+A `FuzzyTrajectoryCache` indexes `TrajectoryCacheKey`s by quantizing
+every float (joint angles, goal position, goal orientation) into an
+integer bin via `int(value // tolerance)`, then serializing the
+resulting dict to JSON bytes. Two keys with the same bin assignments
+collide on the same bytes-key — the "fuzzy match" — and share a sorted
+list of candidate trajectories.
 
 This class implements the Mapping API of `TrajectoryCache` in terms of
 a small set of bytes-keyed storage primitives that concrete subclasses
@@ -30,28 +30,14 @@ import bisect
 import json
 from collections.abc import Iterable
 from copy import deepcopy
-from typing import Any, Literal, Optional
+from typing import Any
 
-from geometry_msgs.msg import PoseStamped
-from moveit.core.robot_state import (  # type: ignore[reportMissingModuleSource]
-    RobotState,
-)
-from moveit.core.robot_trajectory import (  # type: ignore[reportMissingModuleSource]
-    RobotTrajectory,
-)
-from rclpy.impl.rcutils_logger import RcutilsLogger
-
-from tabletop_rig.interfaces.moveit.requests import PlanRequest
-from tabletop_rig.interfaces.moveit.trajectory_cache import (
-    OrientationToleranceT,
-    PositionToleranceT,
-    RobotStateToleranceT,
-    TrajectoryCache,
+from nns_trajectory_cache.trajectory_cache import TrajectoryCache
+from nns_trajectory_cache.types import (
+    CartesianGoal,
+    JointGoal,
+    TrajectoryCacheKey,
     TrajectoryCacheValue,
-)
-from tabletop_rig.utils.ros import (
-    arrays_from_pose_msg,
-    get_joint_group_positions,
 )
 
 # Metadata keys stored alongside trajectory data. Fuzzy trajectory keys
@@ -69,10 +55,10 @@ _META_POSE_LINK = b"pose_link"
 
 
 class FuzzyTrajectoryCache(TrajectoryCache):
-    """Abstract trajectory cache that bins requests into fuzzy keys.
+    """Abstract trajectory cache that bins keys into fuzzy bytes-keys.
 
     Implements `TrajectoryCache`'s Mapping API by quantizing each
-    `PlanRequest` into a bytes-key and dispatching to bytes-keyed
+    `TrajectoryCacheKey` into a bytes-key and dispatching to bytes-keyed
     storage primitives that subclasses provide.
 
     Concurrency: the read-modify-write inside `__setitem__` runs under
@@ -85,35 +71,6 @@ class FuzzyTrajectoryCache(TrajectoryCache):
         cap: when an insert pushes the count over the cap, the most
         expensive — highest `path_cost` — entry is evicted.)
     """
-
-    def __init__(
-        self,
-        *,
-        path: str,
-        scene_hash: str,
-        planning_frame: str,
-        group_name: str,
-        pose_link: Optional[str] = None,
-        robot_state_tolerance: RobotStateToleranceT,
-        position_tolerance: PositionToleranceT,
-        orientation_tolerance: OrientationToleranceT,
-        sort_by: Literal["path_length", "path_duration"] = "path_duration",
-        max_trajectories: int = 1,
-        parent_logger: Optional[RcutilsLogger] = None,
-    ):
-        super().__init__(
-            path=path,
-            scene_hash=scene_hash,
-            planning_frame=planning_frame,
-            group_name=group_name,
-            pose_link=pose_link,
-            robot_state_tolerance=robot_state_tolerance,
-            position_tolerance=position_tolerance,
-            orientation_tolerance=orientation_tolerance,
-            sort_by=sort_by,
-            max_trajectories=max_trajectories,
-            parent_logger=parent_logger,
-        )
 
     # ---------------------------------------------------------------
     # Abstract storage primitives
@@ -226,18 +183,22 @@ class FuzzyTrajectoryCache(TrajectoryCache):
     # ---------------------------------------------------------------
 
     def __setitem__(
-        self, request: PlanRequest, trajectory: RobotTrajectory
+        self, key: TrajectoryCacheKey, value: TrajectoryCacheValue
     ) -> None:
-        """Insert `trajectory` under the fuzzy key for `request`.
+        """Insert `value` under the fuzzy key for `key`.
 
         Maintains at most `max_trajectories` per fuzzy key, evicting
         the most expensive trajectory when over the cap. The full
         read-modify-write is held under `self._lock` so concurrent
         Python threads cannot interleave.
         """
-        self._validate_request(request)
-        fuzzy_key = self._fuzzy_key_bytes(request)
-        value = TrajectoryCacheValue(trajectory, self._sort_by)
+        self._validate_key(key)
+        if not isinstance(value, TrajectoryCacheValue):
+            raise TypeError(
+                f"value must be a TrajectoryCacheValue: "
+                f"{type(value).__name__}"
+            )
+        fuzzy_key = self._fuzzy_key_bytes(key)
         self.log(f"Setting item for key: {fuzzy_key!r}", severity="DEBUG")
 
         with self._lock:
@@ -254,25 +215,27 @@ class FuzzyTrajectoryCache(TrajectoryCache):
 
             self._put_raw(fuzzy_key, values)
 
-    def __getitem__(self, request: PlanRequest) -> list[RobotTrajectory]:
-        """Return matching trajectories for `request`, ranked best-first."""
-        self._validate_request(request)
-        fuzzy_key = self._fuzzy_key_bytes(request)
+    def __getitem__(
+        self, key: TrajectoryCacheKey
+    ) -> list[TrajectoryCacheValue]:
+        """Return matching values for `key`, ranked best-first."""
+        self._validate_key(key)
+        fuzzy_key = self._fuzzy_key_bytes(key)
         self.log(f"Getting values for key: {fuzzy_key!r}", severity="DEBUG")
 
         values = self._get_raw(fuzzy_key)
         self._validate_db_values(values)
-        return [v.get_trajectory(request.start_state) for v in values]
+        return list(values)
 
-    def __contains__(self, request: PlanRequest) -> bool:
-        """Check if `request`'s fuzzy bin has any cached trajectories."""
-        self._validate_request(request)
-        return self._contains_raw(self._fuzzy_key_bytes(request))
+    def __contains__(self, key: TrajectoryCacheKey) -> bool:
+        """Check if `key`'s fuzzy bin has any cached trajectories."""
+        self._validate_key(key)
+        return self._contains_raw(self._fuzzy_key_bytes(key))
 
-    def __delitem__(self, request: PlanRequest) -> None:
-        """Delete every trajectory in `request`'s fuzzy bin."""
-        self._validate_request(request)
-        self._delete_raw(self._fuzzy_key_bytes(request))
+    def __delitem__(self, key: TrajectoryCacheKey) -> None:
+        """Delete every trajectory in `key`'s fuzzy bin."""
+        self._validate_key(key)
+        self._delete_raw(self._fuzzy_key_bytes(key))
 
     def _validate_db_values(self, values: list[TrajectoryCacheValue]) -> None:
         """Sanity-check a list of values pulled from the backend."""
@@ -287,13 +250,13 @@ class FuzzyTrajectoryCache(TrajectoryCache):
     # Fuzzy-key construction
     # ---------------------------------------------------------------
 
-    def _fuzzy_key_bytes(self, request: PlanRequest) -> bytes:
-        """Compute the fuzzy bytes-key for `request`."""
+    def _fuzzy_key_bytes(self, key: TrajectoryCacheKey) -> bytes:
+        """Compute the fuzzy bytes-key for `key`."""
         return json.dumps(
-            self._fuzzy_key_dict(request), sort_keys=True
+            self._fuzzy_key_dict(key), sort_keys=True
         ).encode("utf-8")
 
-    def _fuzzy_key_dict(self, request: PlanRequest) -> dict[str, Any]:
+    def _fuzzy_key_dict(self, key: TrajectoryCacheKey) -> dict[str, Any]:
         """Compute the fuzzy key as a dict.
 
         Joint angles and Cartesian coordinates are each quantized into
@@ -305,34 +268,26 @@ class FuzzyTrajectoryCache(TrajectoryCache):
         metadata and validated against on every request, so they need
         not bloat every fuzzy bin's key.
         """
-        start_state = request.start_state
-        goal = request.goal
+        goal = key.goal
 
-        assert start_state is not None
-
-        positions = get_joint_group_positions(start_state, self._group_name)
         fuzzy: dict[str, Any] = {
             "start_state": self._fuzz_dict(
-                positions, self._robot_state_tolerance
+                key.start_joint_positions, self._robot_state_tolerance
             ),
         }
 
-        if isinstance(goal, RobotState):
-            goal_positions = get_joint_group_positions(goal, self._group_name)
+        if isinstance(goal, JointGoal):
             fuzzy["goal_joints"] = self._fuzz_dict(
-                goal_positions, self._robot_state_tolerance
+                goal.joint_positions, self._robot_state_tolerance
             )
         else:
-            assert isinstance(goal, PoseStamped)
-            goal_position, goal_orientation = arrays_from_pose_msg(
-                goal.pose, euler=False
-            )
+            assert isinstance(goal, CartesianGoal)
             fuzzy["goal_pose"] = {
                 "position": self._fuzz_iterable(
-                    goal_position, self._position_tolerance
+                    goal.position, self._position_tolerance
                 ),
                 "orientation": self._fuzz_iterable(
-                    goal_orientation, self._orientation_tolerance
+                    goal.orientation, self._orientation_tolerance
                 ),
             }
 

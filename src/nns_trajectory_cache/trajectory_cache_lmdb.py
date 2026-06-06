@@ -10,21 +10,19 @@ See `trajectory_cache.FuzzyTrajectoryCache` for the abstract base class
 and the geometric/fuzzy-matching pieces.
 """
 
+import logging
 import os
 import pickle
 from typing import Any, Literal, Optional
 
 import lmdb
-from rclpy.impl.rcutils_logger import RcutilsLogger
 
-from tabletop_rig.interfaces.moveit.trajectory_cache import (
+from nns_trajectory_cache.trajectory_cache import (
     OrientationToleranceT,
     PositionToleranceT,
     RobotStateToleranceT,
 )
-from tabletop_rig.interfaces.moveit.trajectory_cache_fuzzy import (
-    FuzzyTrajectoryCache,
-)
+from nns_trajectory_cache.trajectory_cache_fuzzy import FuzzyTrajectoryCache
 
 _PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL
 _DEFAULT_MAP_SIZE: int = 2 * 1024**3  # 2 GiB of virtual address space
@@ -55,18 +53,21 @@ class LMDBFuzzyTrajectoryCache(FuzzyTrajectoryCache):
         sort_by: Literal["path_length", "path_duration"] = "path_duration",
         max_trajectories: int = 1,
         map_size: int = _DEFAULT_MAP_SIZE,
-        parent_logger: Optional[RcutilsLogger] = None,
+        logger: Optional[logging.Logger] = None,
     ):
         """
         Args:
             path: Absolute path to the cache file. The parent directory
-                is created if it does not exist.
+                is created if it does not exist. Required (unlike the
+                in-memory backends, LMDB always persists to disk).
             map_size: Maximum virtual address space, in bytes, reserved
                 for the LMDB environment. Cheap on Linux (it's only
                 virtual); pick a value larger than the cache will ever
                 grow.
             (Other args: see `FuzzyTrajectoryCache`.)
         """
+        if path is None:
+            raise ValueError("LMDBFuzzyTrajectoryCache requires a 'path'")
         super().__init__(
             path=path,
             scene_hash=scene_hash,
@@ -78,7 +79,7 @@ class LMDBFuzzyTrajectoryCache(FuzzyTrajectoryCache):
             orientation_tolerance=orientation_tolerance,
             sort_by=sort_by,
             max_trajectories=max_trajectories,
-            parent_logger=parent_logger,
+            logger=logger,
         )
 
         self._map_size = int(map_size)

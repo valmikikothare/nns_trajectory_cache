@@ -1,15 +1,24 @@
 [project]
 name = "nns-trajectory-cache"
 version = "0.1.0"
-description = "Add your description here"
+description = "Self-contained nearest-neighbour cache for motion-planning trajectories"
 readme = "README.md"
 authors = [
-    { name = "Valmiki Kothare", email = "valmiki.kothare.vk@gmail.com" }
+    { name = "Valmiki Kothare", email = "valmiki.kothare.vk@gmail.com" },
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "ipykernel>=7.2.0",
+    "jinja2>=3.1.6",
     "lmdb>=2.2.0",
+    "matplotlib>=3.10.9",
+    "numpy>=1.26",
+    "pandas>=3.0.3",
+    "scipy>=1.11",
 ]
+
+[project.scripts]
+nns-cache-benchmark = "nns_trajectory_cache.cache_benchmark_direct:main"
 
 [build-system]
 requires = ["uv_build>=0.11.10,<0.12.0"]

@@ -19,20 +19,17 @@ See `trajectory_cache_fuzzy.FuzzyTrajectoryCache` for the abstract
 base class and the geometric/fuzzy-matching pieces.
 """
 
+import logging
 import os
 import pickle
 from typing import Any, Literal, Optional
 
-from rclpy.impl.rcutils_logger import RcutilsLogger
-
-from tabletop_rig.interfaces.moveit.trajectory_cache import (
+from nns_trajectory_cache.trajectory_cache import (
     OrientationToleranceT,
     PositionToleranceT,
     RobotStateToleranceT,
 )
-from tabletop_rig.interfaces.moveit.trajectory_cache_fuzzy import (
-    FuzzyTrajectoryCache,
-)
+from nns_trajectory_cache.trajectory_cache_fuzzy import FuzzyTrajectoryCache
 
 _PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL
 
@@ -50,7 +47,7 @@ class DictFuzzyTrajectoryCache(FuzzyTrajectoryCache):
     def __init__(
         self,
         *,
-        path: str,
+        path: Optional[str] = None,
         scene_hash: str,
         planning_frame: str,
         group_name: str,
@@ -60,7 +57,7 @@ class DictFuzzyTrajectoryCache(FuzzyTrajectoryCache):
         orientation_tolerance: OrientationToleranceT,
         sort_by: Literal["path_length", "path_duration"] = "path_duration",
         max_trajectories: int = 1,
-        parent_logger: Optional[RcutilsLogger] = None,
+        logger: Optional[logging.Logger] = None,
     ):
         super().__init__(
             path=path,
@@ -73,7 +70,7 @@ class DictFuzzyTrajectoryCache(FuzzyTrajectoryCache):
             orientation_tolerance=orientation_tolerance,
             sort_by=sort_by,
             max_trajectories=max_trajectories,
-            parent_logger=parent_logger,
+            logger=logger,
         )
 
         self._store: dict[bytes, Any] = {}
@@ -127,7 +124,7 @@ class DictFuzzyTrajectoryCache(FuzzyTrajectoryCache):
             if not self._closed:
                 self.log("Cache is already open", severity="WARN")
                 return
-            if os.path.exists(self._path):
+            if self._path is not None and os.path.exists(self._path):
                 try:
                     with open(self._path, "rb") as f:
                         self._store = pickle.load(f)
@@ -150,16 +147,17 @@ class DictFuzzyTrajectoryCache(FuzzyTrajectoryCache):
             if self._closed:
                 self.log("Cache is already closed", severity="WARN")
                 return
-            try:
-                with open(self._path, "wb") as f:
-                    pickle.dump(self._store, f, protocol=_PICKLE_PROTOCOL)
-                self.log(
-                    f"Saved {len(self._store)} entries to {self._path}",
-                    severity="INFO",
-                )
-            except Exception as e:
-                self.log(
-                    f"Failed to save cache to {self._path}: {e}",
-                    severity="ERROR",
-                )
+            if self._path is not None:
+                try:
+                    with open(self._path, "wb") as f:
+                        pickle.dump(self._store, f, protocol=_PICKLE_PROTOCOL)
+                    self.log(
+                        f"Saved {len(self._store)} entries to {self._path}",
+                        severity="INFO",
+                    )
+                except Exception as e:
+                    self.log(
+                        f"Failed to save cache to {self._path}: {e}",
+                        severity="ERROR",
+                    )
             self._closed = True

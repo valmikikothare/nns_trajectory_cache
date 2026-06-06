@@ -21,31 +21,23 @@ backends comparable on identical input.
 
 import bisect
 import json
+import logging
 import os
 import pickle
 from collections.abc import Iterable
 from typing import Any, Literal, Optional
 
-from geometry_msgs.msg import PoseStamped
-from moveit.core.robot_state import (  # type: ignore[reportMissingModuleSource]
-    RobotState,
-)
-from moveit.core.robot_trajectory import (  # type: ignore[reportMissingModuleSource]
-    RobotTrajectory,
-)
-from rclpy.impl.rcutils_logger import RcutilsLogger
-
-from tabletop_rig.interfaces.moveit.requests import PlanRequest
-from tabletop_rig.interfaces.moveit.trajectory_cache import (
+from nns_trajectory_cache.trajectory_cache import (
     OrientationToleranceT,
     PositionToleranceT,
     RobotStateToleranceT,
     TrajectoryCache,
-    TrajectoryCacheValue,
 )
-from tabletop_rig.utils.ros import (
-    arrays_from_pose_msg,
-    get_joint_group_positions,
+from nns_trajectory_cache.types import (
+    CartesianGoal,
+    JointGoal,
+    TrajectoryCacheKey,
+    TrajectoryCacheValue,
 )
 
 _PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL
@@ -77,7 +69,7 @@ class LinearTrajectoryCache(TrajectoryCache):
     def __init__(
         self,
         *,
-        path: str,
+        path: Optional[str] = None,
         scene_hash: str,
         planning_frame: str,
         group_name: str,
@@ -87,7 +79,7 @@ class LinearTrajectoryCache(TrajectoryCache):
         orientation_tolerance: OrientationToleranceT,
         sort_by: Literal["path_length", "path_duration"] = "path_duration",
         max_trajectories: int = 1,
-        parent_logger: Optional[RcutilsLogger] = None,
+        logger: Optional[logging.Logger] = None,
     ):
         super().__init__(
             path=path,
@@ -100,7 +92,7 @@ class LinearTrajectoryCache(TrajectoryCache):
             orientation_tolerance=orientation_tolerance,
             sort_by=sort_by,
             max_trajectories=max_trajectories,
-            parent_logger=parent_logger,
+            logger=logger,
         )
 
         # Entries keyed by an exact JSON serialization of the request
@@ -120,19 +112,23 @@ class LinearTrajectoryCache(TrajectoryCache):
     # ---------------------------------------------------------------
 
     def __setitem__(
-        self, request: PlanRequest, trajectory: RobotTrajectory
+        self, key: TrajectoryCacheKey, value: TrajectoryCacheValue
     ) -> None:
-        """Insert `trajectory` under the exact key for `request`.
+        """Insert `value` under the exact key for `key`.
 
         Maintains at most `max_trajectories` per exact key, evicting
         the most expensive trajectory when over the cap. The read-
         modify-write is held under `self._lock`.
         """
-        self._validate_request(request)
+        self._validate_key(key)
+        if not isinstance(value, TrajectoryCacheValue):
+            raise TypeError(
+                f"value must be a TrajectoryCacheValue: "
+                f"{type(value).__name__}"
+            )
         self._require_open()
-        exact_dict = self._exact_key_dict(request)
+        exact_dict = self._exact_key_dict(key)
         exact_bytes = self._exact_key_bytes(exact_dict)
-        value = TrajectoryCacheValue(trajectory, self._sort_by)
         self.log(f"Setting item for key: {exact_bytes!r}", severity="DEBUG")
 
         with self._lock:
@@ -148,17 +144,19 @@ class LinearTrajectoryCache(TrajectoryCache):
 
             self._store[exact_bytes] = (exact_dict, values)
 
-    def __getitem__(self, request: PlanRequest) -> list[RobotTrajectory]:
-        """Return matching trajectories for `request`, ranked best-first.
+    def __getitem__(
+        self, key: TrajectoryCacheKey
+    ) -> list[TrajectoryCacheValue]:
+        """Return matching values for `key`, ranked best-first.
 
         Linearly scans every stored entry, collecting candidates whose
         stored fingerprint is within tolerance of the query's. The
         full pool of candidates is then sorted by `path_cost` and
         capped at `max_trajectories`.
         """
-        self._validate_request(request)
+        self._validate_key(key)
         self._require_open()
-        query_dict = self._exact_key_dict(request)
+        query_dict = self._exact_key_dict(key)
 
         all_matches: list[TrajectoryCacheValue] = []
         for stored_dict, values in self._store.values():
@@ -166,43 +164,41 @@ class LinearTrajectoryCache(TrajectoryCache):
                 all_matches.extend(values)
 
         if not all_matches:
-            raise KeyError(request)
+            raise KeyError(key)
 
         all_matches.sort()
-        capped = all_matches[: self._max_trajectories]
-        assert request.start_state is not None
-        return [v.get_trajectory(request.start_state) for v in capped]
+        return all_matches[: self._max_trajectories]
 
-    def __contains__(self, request: PlanRequest) -> bool:
-        """Check if any stored entry is within tolerance of `request`."""
-        self._validate_request(request)
+    def __contains__(self, key: TrajectoryCacheKey) -> bool:
+        """Check if any stored entry is within tolerance of `key`."""
+        self._validate_key(key)
         self._require_open()
-        query_dict = self._exact_key_dict(request)
+        query_dict = self._exact_key_dict(key)
         for stored_dict, _ in self._store.values():
             if self._within_tolerance(query_dict, stored_dict):
                 return True
         return False
 
-    def __delitem__(self, request: PlanRequest) -> None:
-        """Delete every entry within tolerance of `request`.
+    def __delitem__(self, key: TrajectoryCacheKey) -> None:
+        """Delete every entry within tolerance of `key`.
 
         Raises:
             KeyError: If no entry matches.
         """
-        self._validate_request(request)
+        self._validate_key(key)
         self._require_open()
-        query_dict = self._exact_key_dict(request)
+        query_dict = self._exact_key_dict(key)
 
         with self._lock:
             to_remove = [
-                key
-                for key, (stored_dict, _) in self._store.items()
+                stored_key
+                for stored_key, (stored_dict, _) in self._store.items()
                 if self._within_tolerance(query_dict, stored_dict)
             ]
             if not to_remove:
-                raise KeyError(request)
-            for key in to_remove:
-                del self._store[key]
+                raise KeyError(key)
+            for stored_key in to_remove:
+                del self._store[stored_key]
 
     def __len__(self) -> int:
         """Total number of stored entries (distinct exact fingerprints)."""
@@ -219,7 +215,7 @@ class LinearTrajectoryCache(TrajectoryCache):
             if not self._closed:
                 self.log("Cache is already open", severity="WARN")
                 return
-            if os.path.exists(self._path):
+            if self._path is not None and os.path.exists(self._path):
                 try:
                     with open(self._path, "rb") as f:
                         self._store = pickle.load(f)
@@ -242,26 +238,27 @@ class LinearTrajectoryCache(TrajectoryCache):
             if self._closed:
                 self.log("Cache is already closed", severity="WARN")
                 return
-            try:
-                with open(self._path, "wb") as f:
-                    pickle.dump(self._store, f, protocol=_PICKLE_PROTOCOL)
-                self.log(
-                    f"Saved {len(self._store)} entries to {self._path}",
-                    severity="INFO",
-                )
-            except Exception as e:
-                self.log(
-                    f"Failed to save cache to {self._path}: {e}",
-                    severity="ERROR",
-                )
+            if self._path is not None:
+                try:
+                    with open(self._path, "wb") as f:
+                        pickle.dump(self._store, f, protocol=_PICKLE_PROTOCOL)
+                    self.log(
+                        f"Saved {len(self._store)} entries to {self._path}",
+                        severity="INFO",
+                    )
+                except Exception as e:
+                    self.log(
+                        f"Failed to save cache to {self._path}: {e}",
+                        severity="ERROR",
+                    )
             self._closed = True
 
     # ---------------------------------------------------------------
     # Exact-key construction
     # ---------------------------------------------------------------
 
-    def _exact_key_dict(self, request: PlanRequest) -> dict[str, Any]:
-        """Compute the exact (non-fuzzy) fingerprint dict for `request`.
+    def _exact_key_dict(self, key: TrajectoryCacheKey) -> dict[str, Any]:
+        """Compute the exact (non-fuzzy) fingerprint dict for `key`.
 
         Mirrors `FuzzyTrajectoryCache._fuzzy_key_dict` but skips the
         integer-quantization step — all floats are kept at full
@@ -274,27 +271,19 @@ class LinearTrajectoryCache(TrajectoryCache):
         `"goal_pose"`. `_within_tolerance` discriminates the two via
         which key is present.
         """
-        start_state = request.start_state
-        goal = request.goal
+        goal = key.goal
 
-        assert start_state is not None
-
-        positions = get_joint_group_positions(start_state, self._group_name)
         exact: dict[str, Any] = {
-            "start_state": dict(positions),
+            "start_state": dict(key.start_joint_positions),
         }
 
-        if isinstance(goal, RobotState):
-            goal_positions = get_joint_group_positions(goal, self._group_name)
-            exact["goal_joints"] = dict(goal_positions)
+        if isinstance(goal, JointGoal):
+            exact["goal_joints"] = dict(goal.joint_positions)
         else:
-            assert isinstance(goal, PoseStamped)
-            goal_position, goal_orientation = arrays_from_pose_msg(
-                goal.pose, euler=False
-            )
+            assert isinstance(goal, CartesianGoal)
             exact["goal_pose"] = {
-                "position": tuple(goal_position),
-                "orientation": tuple(goal_orientation),
+                "position": tuple(goal.position),
+                "orientation": tuple(goal.orientation),
             }
 
         return exact

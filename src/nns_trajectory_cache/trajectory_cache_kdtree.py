@@ -1,12 +1,12 @@
 """K-d tree trajectory cache (in-memory, feature-vector indexed).
 
-Each `PlanRequest` is reduced to a 12- or 13-dimensional feature
-vector:
+Each `TrajectoryCacheKey` is reduced to a feature vector whose
+dimensionality depends on the goal type (`n` = number of joints in the
+group):
 
-- **Joint-space goal (12D)**: 6 start-state joint angles ++ 6 goal
-  joint angles.
-- **Cartesian goal (13D)**: 6 start-state joint angles ++ 3 goal
-  position components ++ 4 goal orientation quaternion components.
+- **Joint-space goal (2n-D)**: start joint angles ++ goal joint angles.
+- **Cartesian goal ((n+7)-D)**: start joint angles ++ 3 goal position
+  components ++ 4 goal orientation quaternion components.
 
 Because these two spaces have different dimensions they cannot share
 a single tree, so this backend holds two scipy `KDTree`s side-by-side
@@ -25,32 +25,25 @@ the feature vector entirely (they live in the base class as cache-
 level metadata and are validated on every request).
 """
 
+import logging
 import os
 import pickle
 from typing import Literal, Optional
 
 import numpy as np
-from geometry_msgs.msg import PoseStamped
-from moveit.core.robot_state import (  # type: ignore[reportMissingModuleSource]
-    RobotState,
-)
-from moveit.core.robot_trajectory import (  # type: ignore[reportMissingModuleSource]
-    RobotTrajectory,
-)
-from rclpy.impl.rcutils_logger import RcutilsLogger
 from scipy.spatial import KDTree
 
-from tabletop_rig.interfaces.moveit.requests import PlanRequest
-from tabletop_rig.interfaces.moveit.trajectory_cache import (
+from nns_trajectory_cache.trajectory_cache import (
     OrientationToleranceT,
     PositionToleranceT,
     RobotStateToleranceT,
     TrajectoryCache,
-    TrajectoryCacheValue,
 )
-from tabletop_rig.utils.ros import (
-    arrays_from_pose_msg,
-    get_joint_group_positions,
+from nns_trajectory_cache.types import (
+    CartesianGoal,
+    JointGoal,
+    TrajectoryCacheKey,
+    TrajectoryCacheValue,
 )
 
 _PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL
@@ -75,11 +68,11 @@ class KDTreeTrajectoryCache(TrajectoryCache):
             feature/value lists are loaded from this file on `open()`
             and saved on `close()`. If `None`, the cache is purely
             process-local.
-        sample_state: Any `RobotState` from the same MoveIt setup the
-            cache will be queried against. Used once at construction
-            to snapshot the canonical joint ordering (from the joint
-            model group's `active_joint_model_names`) so that feature
-            vectors built later are consistent.
+        joint_names: The canonical joint ordering for the group. Every
+            `TrajectoryCacheKey` passed to the cache must supply exactly
+            these joint names (in its `start_joint_positions` and any
+            `JointGoal`). The ordering fixes how feature vectors are
+            laid out, so it must be stable across the cache's lifetime.
         (See `TrajectoryCache`. `max_trajectories` caps the number of
         results returned per query — there is no per-point insert
         cap; each insert is its own tree point.)
@@ -88,18 +81,18 @@ class KDTreeTrajectoryCache(TrajectoryCache):
     def __init__(
         self,
         *,
-        path: str,
+        path: Optional[str] = None,
         scene_hash: str,
         planning_frame: str,
         group_name: str,
         pose_link: Optional[str] = None,
-        sample_state: RobotState,
+        joint_names: list[str],
         robot_state_tolerance: RobotStateToleranceT,
         position_tolerance: PositionToleranceT,
         orientation_tolerance: OrientationToleranceT,
         sort_by: Literal["path_length", "path_duration"] = "path_duration",
         max_trajectories: int = 1,
-        parent_logger: Optional[RcutilsLogger] = None,
+        logger: Optional[logging.Logger] = None,
     ):
         super().__init__(
             path=path,
@@ -112,16 +105,16 @@ class KDTreeTrajectoryCache(TrajectoryCache):
             orientation_tolerance=orientation_tolerance,
             sort_by=sort_by,
             max_trajectories=max_trajectories,
-            parent_logger=parent_logger,
+            logger=logger,
         )
 
-        # Snapshot joint ordering and build per-coordinate scale
-        # vectors once, up front. The joint list is taken from the
-        # robot model's joint model group and is stable for any
-        # RobotState produced by the same MoveIt setup.
-        self._joint_names: list[str] = list(
-            get_joint_group_positions(sample_state, self._group_name).keys()
-        )
+        # The canonical joint ordering fixes the feature-vector layout
+        # and the per-coordinate scale vectors, both built once up
+        # front. Every key handed to the cache must use exactly these
+        # joints.
+        if not joint_names:
+            raise ValueError("'joint_names' must be non-empty")
+        self._joint_names: list[str] = list(joint_names)
         self._state_scale: np.ndarray = self._build_state_scale()
         self._pose_scale: np.ndarray = self._build_pose_scale()
 
@@ -176,28 +169,26 @@ class KDTreeTrajectoryCache(TrajectoryCache):
     # Feature construction
     # ---------------------------------------------------------------
 
-    def _joints_to_array(self, state: RobotState) -> np.ndarray:
+    def _joints_to_array(
+        self, positions: "dict[str, float]"
+    ) -> np.ndarray:
         """Pull joint positions into a numpy array in canonical order."""
-        positions = get_joint_group_positions(state, self._group_name)
         return np.array([positions[j] for j in self._joint_names], dtype=float)
 
-    def _state_feature(self, request: PlanRequest) -> np.ndarray:
-        """Compute the 12D feature vector for a joint-space goal request."""
-        assert isinstance(request.start_state, RobotState)
-        assert isinstance(request.goal, RobotState)
-        start = self._joints_to_array(request.start_state)
-        goal = self._joints_to_array(request.goal)
+    def _state_feature(self, key: TrajectoryCacheKey) -> np.ndarray:
+        """Compute the 12D feature vector for a joint-space goal key."""
+        assert isinstance(key.goal, JointGoal)
+        start = self._joints_to_array(dict(key.start_joint_positions))
+        goal = self._joints_to_array(dict(key.goal.joint_positions))
         return np.concatenate([start, goal])
 
-    def _pose_feature(self, request: PlanRequest) -> np.ndarray:
-        """Compute the 13D feature vector for a Cartesian goal request."""
-        assert isinstance(request.start_state, RobotState)
-        assert isinstance(request.goal, PoseStamped)
-        start = self._joints_to_array(request.start_state)
-        pos, ori = arrays_from_pose_msg(request.goal.pose, euler=False)
-        return np.concatenate(
-            [start, np.asarray(pos, dtype=float), np.asarray(ori, dtype=float)]
-        )
+    def _pose_feature(self, key: TrajectoryCacheKey) -> np.ndarray:
+        """Compute the 13D feature vector for a Cartesian goal key."""
+        assert isinstance(key.goal, CartesianGoal)
+        start = self._joints_to_array(dict(key.start_joint_positions))
+        pos = np.asarray(key.goal.position, dtype=float)
+        ori = np.asarray(key.goal.orientation, dtype=float)
+        return np.concatenate([start, pos, ori])
 
     # ---------------------------------------------------------------
     # Lazy tree build
@@ -232,76 +223,77 @@ class KDTreeTrajectoryCache(TrajectoryCache):
     # ---------------------------------------------------------------
 
     def __setitem__(
-        self, request: PlanRequest, trajectory: RobotTrajectory
+        self, key: TrajectoryCacheKey, value: TrajectoryCacheValue
     ) -> None:
         """Append a single (feature, value) point to the appropriate store.
 
         The tree is invalidated implicitly via the size-check in
         `_ensure_*_tree` — the next query rebuilds it.
         """
-        self._validate_request(request)
+        self._validate_key(key)
+        if not isinstance(value, TrajectoryCacheValue):
+            raise TypeError(
+                f"value must be a TrajectoryCacheValue: "
+                f"{type(value).__name__}"
+            )
         self._require_open()
-        assert isinstance(request.start_state, RobotState)
-
-        value = TrajectoryCacheValue(trajectory, self._sort_by)
 
         with self._lock:
-            if isinstance(request.goal, RobotState):
-                feature = self._state_feature(request)
+            if isinstance(key.goal, JointGoal):
+                feature = self._state_feature(key)
                 self._state_features.append(feature)
                 self._state_values.append(value)
             else:
-                feature = self._pose_feature(request)
+                feature = self._pose_feature(key)
                 self._pose_features.append(feature)
                 self._pose_values.append(value)
 
-    def __getitem__(self, request: PlanRequest) -> list[RobotTrajectory]:
+    def __getitem__(
+        self, key: TrajectoryCacheKey
+    ) -> list[TrajectoryCacheValue]:
         """Return cheapest-`max_trajectories` matches via L∞ ball query."""
-        self._validate_request(request)
+        self._validate_key(key)
         self._require_open()
-        assert isinstance(request.start_state, RobotState)
 
-        if isinstance(request.goal, RobotState):
+        if isinstance(key.goal, JointGoal):
             self._ensure_state_tree()
             tree = self._state_tree
             values = self._state_values
-            query_feature = self._state_feature(request)
+            query_feature = self._state_feature(key)
             scale = self._state_scale
         else:
             self._ensure_pose_tree()
             tree = self._pose_tree
             values = self._pose_values
-            query_feature = self._pose_feature(request)
+            query_feature = self._pose_feature(key)
             scale = self._pose_scale
 
         if tree is None:
-            raise KeyError(request)
+            raise KeyError(key)
 
         scaled_query = query_feature / scale
         indices = tree.query_ball_point(scaled_query, r=1.0, p=np.inf)
 
         if not indices:
-            raise KeyError(request)
+            raise KeyError(key)
 
         candidates = sorted(values[i] for i in indices)
-        capped = candidates[: self._max_trajectories]
-        return [v.get_trajectory(request.start_state) for v in capped]
+        return candidates[: self._max_trajectories]
 
-    def __contains__(self, request: PlanRequest) -> bool:
+    def __contains__(self, key: TrajectoryCacheKey) -> bool:
         """Return True iff at least one stored point is within tolerance."""
-        self._validate_request(request)
+        self._validate_key(key)
         self._require_open()
-        assert isinstance(request.start_state, RobotState)
 
-        if isinstance(request.goal, RobotState):
+        if isinstance(key.goal, JointGoal):
             self._ensure_state_tree()
             tree = self._state_tree
-            query_feature = self._state_feature(request)
+            query_feature = self._state_feature(key)
             scale = self._state_scale
         else:
             self._ensure_pose_tree()
             tree = self._pose_tree
-            query_feature = self._pose_feature(request)
+            query_feature = self._pose_feature(key)
             scale = self._pose_scale
 
         if tree is None:
@@ -310,8 +302,8 @@ class KDTreeTrajectoryCache(TrajectoryCache):
         indices = tree.query_ball_point(scaled_query, r=1.0, p=np.inf)
         return bool(indices)
 
-    def __delitem__(self, request: PlanRequest) -> None:
-        """Delete every stored point within tolerance of `request`.
+    def __delitem__(self, key: TrajectoryCacheKey) -> None:
+        """Delete every stored point within tolerance of `key`.
 
         Bypasses the k-d tree (which has no native delete) and rebuilds
         the affected store by filtering. Invalidates the tree.
@@ -319,21 +311,21 @@ class KDTreeTrajectoryCache(TrajectoryCache):
         Raises:
             KeyError: If no stored point matches.
         """
-        self._validate_request(request)
+        self._validate_key(key)
         self._require_open()
-        assert isinstance(request.start_state, RobotState)
 
+        is_joint_goal = isinstance(key.goal, JointGoal)
         with self._lock:
-            if isinstance(request.goal, RobotState):
+            if is_joint_goal:
                 features = self._state_features
                 values = self._state_values
                 scale = self._state_scale
-                query_feature = self._state_feature(request)
+                query_feature = self._state_feature(key)
             else:
                 features = self._pose_features
                 values = self._pose_values
                 scale = self._pose_scale
-                query_feature = self._pose_feature(request)
+                query_feature = self._pose_feature(key)
 
             keep_features: list[np.ndarray] = []
             keep_values: list[TrajectoryCacheValue] = []
@@ -346,9 +338,9 @@ class KDTreeTrajectoryCache(TrajectoryCache):
                 keep_values.append(val)
 
             if not matched:
-                raise KeyError(request)
+                raise KeyError(key)
 
-            if isinstance(request.goal, RobotState):
+            if is_joint_goal:
                 self._state_features = keep_features
                 self._state_values = keep_values
                 self._state_tree = None
@@ -369,10 +361,9 @@ class KDTreeTrajectoryCache(TrajectoryCache):
 
         The persisted payload is `(joint_names, state_features,
         state_values, pose_features, pose_values)`. If the persisted
-        `joint_names` does not match the current ordering (snapshotted
-        from `sample_state`), the loaded features would be scrambled
-        against the cache's scale vectors — so we discard the file and
-        start fresh in that case.
+        `joint_names` does not match the configured ordering, the loaded
+        features would be scrambled against the cache's scale vectors —
+        so we discard the file and start fresh in that case.
 
         Trees are not persisted; they're rebuilt lazily on the next
         query.
@@ -381,7 +372,7 @@ class KDTreeTrajectoryCache(TrajectoryCache):
             if not self._closed:
                 self.log("Cache is already open", severity="WARN")
                 return
-            if os.path.exists(self._path):
+            if self._path is not None and os.path.exists(self._path):
                 try:
                     with open(self._path, "rb") as f:
                         payload = pickle.load(f)
@@ -395,7 +386,7 @@ class KDTreeTrajectoryCache(TrajectoryCache):
                     if list(saved_joint_names) != self._joint_names:
                         self.log(
                             f"Joint ordering in {self._path} does not match "
-                            f"current sample_state; starting fresh.",
+                            f"the configured joint_names; starting fresh.",
                             severity="WARN",
                         )
                     else:
@@ -427,25 +418,26 @@ class KDTreeTrajectoryCache(TrajectoryCache):
             if self._closed:
                 self.log("Cache is already closed", severity="WARN")
                 return
-            try:
-                payload = (
-                    list(self._joint_names),
-                    self._state_features,
-                    self._state_values,
-                    self._pose_features,
-                    self._pose_values,
-                )
-                with open(self._path, "wb") as f:
-                    pickle.dump(payload, f, protocol=_PICKLE_PROTOCOL)
-                self.log(
-                    f"Saved {len(self._state_features)} state + "
-                    f"{len(self._pose_features)} pose entries to "
-                    f"{self._path}",
-                    severity="INFO",
-                )
-            except Exception as e:
-                self.log(
-                    f"Failed to save cache to {self._path}: {e}",
-                    severity="ERROR",
-                )
+            if self._path is not None:
+                try:
+                    payload = (
+                        list(self._joint_names),
+                        self._state_features,
+                        self._state_values,
+                        self._pose_features,
+                        self._pose_values,
+                    )
+                    with open(self._path, "wb") as f:
+                        pickle.dump(payload, f, protocol=_PICKLE_PROTOCOL)
+                    self.log(
+                        f"Saved {len(self._state_features)} state + "
+                        f"{len(self._pose_features)} pose entries to "
+                        f"{self._path}",
+                        severity="INFO",
+                    )
+                except Exception as e:
+                    self.log(
+                        f"Failed to save cache to {self._path}: {e}",
+                        severity="ERROR",
+                    )
             self._closed = True
